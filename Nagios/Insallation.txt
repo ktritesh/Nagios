@@ -1,0 +1,201 @@
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+sudo su
+apt update
+apt upgrade -y
+
+echo we need to install Apache, PHP, few dependancies and some tools to compile programs like gcc.
+apt install build-essential libgd-dev openssl libssl-dev apache2 php libapache2-mod-php snmp libnet-snmp-perl gettext libmcrypt-dev libssl-dev unzip -y
+
+echo then we create a user for nagios to run
+useradd nagios 
+12345
+echo we add that user to apache user group
+usermod -a -G nagios www-data
+
+echo we get the nagios installtion componenets diretly from their github project page.
+echo we download nagios  - check the laatest version and chnage the url below accordingly
+wget https://github.com/NagiosEnterprises/nagioscore/releases/download/nagios-4.4.3/nagios-4.4.3.tar.gz --no-check-certificate
+tar -xf nagios-4.4.3.tar.gz
+cd nagios-4.4.3
+
+echo we configure the project to match our system
+./configure --with-httpd-conf=/etc/apache2/sites-enabled
+
+echo then we compile and install nagios componenets in these next few commands
+make all
+make install
+make install-init
+make install-commandmode
+make install-config
+make install-webconf
+
+echo we enable the nagios to run at startup
+systemctl enable nagios
+
+echo we enable rewrite and cgi modules for apache
+a2enmod rewrite cgi
+
+echo we add a username and password for nagios web interface
+htpasswd -c /usr/local/nagios/etc/htpasswd.users nagiosadmin
+nagiosadmin
+12345
+
+echo we restart the apache web interface
+systemctl restart apache2
+
+echo Next we install the nagios plugin
+cd ..
+wget https://github.com/nagios-plugins/nagios-plugins/releases/download/release-2.2.1/nagios-plugins-2.2.1.tar.gz --no-check-certificate
+tar -xf nagios-plugins-2.2.1.tar.gz
+cd nagios-plugins-2.2.1
+
+echo next we configure the makefiles
+./configure
+make install
+echo we start nagios
+systemctl start nagios
+systemctl status nagios
+
+echo Goto Web Page
+cd ..
+
+cd /usr/local/nagios/etc/objects/
+vi commands.cfg   ===> check_commands wiil be here
+vi templates.cfg  ===>  templates.cfg defines the host and service templates here. some definations are inherrited from others
+vi localhost.cfg ===> localhost.cfg defines the services to be checked in the server itself
+
+echo we download nrpe from the nagios github project page
+wget https://github.com/NagiosEnterprises/nrpe/releases/download/nrpe-3.2.1/nrpe-3.2.1.tar.gz --no-check-certificate
+tar -xf nrpe-3.2.1.tar.gz
+cd nrpe-3.2.1
+echo we configure makefiles
+./configure
+make check_nrpe
+make install-plugin
+echo here we define a check_nrpe command
+vi /usr/local/nagios/etc/objects/commands.cfg
+echo add below lines to the above file
+
+define command{
+        command_name check_nrpe
+        command_line $USER1$/check_nrpe -H $HOSTADDRESS$ -c $ARG1$
+}
+
+echo Plugins here - 
+cd /usr/local/nagios/libexec
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+On client node:-
+----------------
+sudo su
+apt update
+apt install -y autoconf automake gcc libc6 libmcrypt-dev make libssl-dev unzip
+useradd nagios
+echo we download nrpe from the nagios github project page
+wget https://github.com/NagiosEnterprises/nrpe/releases/download/nrpe-3.2.1/nrpe-3.2.1.tar.gz --no-check-certificate
+tar -xf nrpe-3.2.1.tar.gz
+cd nrpe-3.2.1
+echo we configure makefiles
+./configure
+make all
+make install
+make install-config
+make install-init
+echo next we install plugins
+cd ..
+wget https://github.com/nagios-plugins/nagios-plugins/releases/download/release-2.2.1/nagios-plugins-2.2.1.tar.gz --no-check-certificate
+tar -xf nagios-plugins-2.2.1.tar.gz
+cd nagios-plugins-2.2.1
+echo next we configure the makefiles
+./configure
+make install
+echo we can check if the plugins as ready
+cd /usr/local/nagios/libexec
+vi /usr/local/nagios/etc/nrpe.cfg
+echo change file with below info
+ allowed_hosts=127.0.0.1,::1,"Nagios_server_IP"
+ server_address=0.0.0.0
+echo we enable and start nrpe.
+systemctl enable nrpe
+systemctl start nrpe
+
+echo new we check the connectivity to nrpe in client from nagios server
+
+On server:- 
+-----------
+/usr/local/nagios/libexec/check_nrpe -H "Client_IP"
+echo If you see a version number, this means that NRPE is up and running, and Nagios can reach it. If you see an error instead, verify that your firewall allows traffic on TCP port 5666.
+
+
+On client:-
+-----------
+vi /usr/local/nagios/etc/nrpe.cfg
+echo Here we define the commands or the plugin that we need to run for differenet checks
+
+On server:- 
+-----------
+vi /usr/local/nagios/etc/nagios.cfg
+ add line cfg_file=/usr/local/nagios/etc/objects/frontend.cfg
+
+vi /usr/local/nagios/etc/objects/frontend.cfg
+ add below definitions
+
+define host{
+        use                     linux-server 
+        host_name               frontend
+        alias                   nagios-client
+        address                 192.168.1.16
+        }
+
+define service {
+        use                             generic-service
+        host_name                       cdutech
+        service_description             Users
+        check_command                   check_nrpe!check_users
+}
+
+define service {
+        use                             generic-service
+        host_name                       frontend
+        service_description             CPU load
+        check_command                   check_nrpe!check_load
+}
+
+define service {
+        use                             generic-service
+        host_name                       frontend
+        service_description             Disk /
+        check_command                   check_nrpe!check_sda1
+}
+
+define service {
+        use                             generic-service
+        host_name                       frontend
+        service_description             Zombie Processes
+        check_command                   check_nrpe!check_zombie_procs
+}
+
+define service {
+        use                             generic-service
+        host_name                       frontend
+        service_description             Total Processes
+        check_command                   check_nrpe!check_total_procs
+}
+
+
+compare the files:
+frontend.cfg in nagios-server vs nrpe.cfg in the client to make sure they match
+vi /usr/local/nagios/etc/nrpe.cfg
+
+echo if you have a firewall enabled make sure to open 5666 port on the clinet.
+
+On client - 
+systemctl restart nrpe
+
+On server - 
+systemctl restart nagios
+
+
+
+
+sed -i.bak 's/client.itzgeek.local/ec2-3-16-164-248.us-east-2.compute.amazonaws.com/g' /usr/local/nagios/etc/servers/client.itzgeek.local.cfg
+sed -i.bak 's/192.168.0.20/3.16.164.248/g' /usr/local/nagios/etc/servers/client.itzgeek.local.cfg
